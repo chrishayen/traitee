@@ -33,7 +33,7 @@ defmodule Traitee.LLM.ClaudeSubscription do
 
   @required_prefix "You are Claude Code, Anthropic's official CLI for Claude."
 
-  @beta_headers "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+  @beta_headers "oauth-2025-04-20,interleaved-thinking-2025-05-14"
 
   @thinking_models MapSet.new(["claude-opus-4.6", "claude-sonnet-4.6"])
 
