@@ -1239,13 +1239,7 @@ defmodule Traitee.Onboard.Wizard do
   end
 
   defp store_setup_token(raw_token) do
-    token_map =
-      case Jason.decode(raw_token) do
-        {:ok, map} when is_map(map) -> map
-        _ -> %{"access_token" => raw_token}
-      end
-
-    Traitee.LLM.OAuth.TokenManager.store_tokens(token_map)
+    Traitee.LLM.OAuth.TokenManager.exchange_and_store(String.trim(raw_token))
   end
 
   defp confirm?(question) do

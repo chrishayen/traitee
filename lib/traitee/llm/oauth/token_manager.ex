@@ -1,18 +1,15 @@
 defmodule Traitee.LLM.OAuth.TokenManager do
   @moduledoc """
-  GenServer managing Claude subscription setup-token lifecycle.
+  GenServer managing Claude subscription OAuth token lifecycle.
 
-  Stores access + refresh tokens, proactively refreshes before expiry,
-  and persists tokens via `CredentialStore`.
+  The `claude setup-token` command outputs a one-time authorization code.
+  This module exchanges it for an access_token + refresh_token via the
+  Anthropic OAuth token endpoint, then manages refresh before expiry.
 
   ## Usage
 
-      # After user pastes setup-token:
-      TokenManager.store_tokens(%{
-        "access_token" => "sk-ant-oat-...",
-        "refresh_token" => "sk-ant-ort-...",
-        "expires_at" => "2026-03-25T20:00:00Z"
-      })
+      # After user pastes setup-token (authorization code):
+      TokenManager.exchange_and_store("GM6SfL...")
 
       # In the provider:
       {:ok, token} = TokenManager.get_access_token()
@@ -27,8 +24,9 @@ defmodule Traitee.LLM.OAuth.TokenManager do
   @provider :claude_subscription
   @refresh_margin_ms 30 * 60 * 1_000
   @retry_delay_ms 60 * 1_000
-  @token_url "https://claude.ai/oauth/token"
+  @token_url "https://console.anthropic.com/v1/oauth/token"
   @client_id "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+  @redirect_uri "https://console.anthropic.com/oauth/code/callback"
   @max_refresh_retries 2
 
   # -- Public API --
@@ -42,7 +40,15 @@ defmodule Traitee.LLM.OAuth.TokenManager do
     GenServer.call(__MODULE__, :get_access_token)
   end
 
-  @doc "Stores tokens from a setup-token paste or refresh response."
+  @doc """
+  Exchanges a setup-token (authorization code) for OAuth credentials
+  and stores the resulting access_token + refresh_token.
+  """
+  def exchange_and_store(setup_token) do
+    GenServer.call(__MODULE__, {:exchange, setup_token}, 30_000)
+  end
+
+  @doc "Stores already-exchanged tokens directly (map with access_token, refresh_token, expires_in)."
   def store_tokens(token_map) do
     GenServer.call(__MODULE__, {:store_tokens, token_map})
   end
@@ -89,6 +95,18 @@ defmodule Traitee.LLM.OAuth.TokenManager do
   end
 
   @impl true
+  def handle_call({:exchange, setup_token}, _from, state) do
+    case do_exchange(setup_token) do
+      {:ok, token_resp} ->
+        new_state = persist_and_update(token_resp, state)
+        Logger.info("[claude_subscription] Setup-token exchanged successfully")
+        {:reply, :ok, maybe_schedule_refresh(new_state)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call({:store_tokens, token_map}, _from, state) do
     new_state = persist_and_update(token_map, state)
     {:reply, :ok, maybe_schedule_refresh(new_state)}
@@ -159,7 +177,53 @@ defmodule Traitee.LLM.OAuth.TokenManager do
     {:noreply, state}
   end
 
-  # -- Private --
+  # -- Private: Exchange --
+
+  defp do_exchange(setup_token) do
+    body = %{
+      grant_type: "authorization_code",
+      code: setup_token,
+      client_id: @client_id,
+      redirect_uri: @redirect_uri
+    }
+
+    case Req.post(@token_url, json: body, receive_timeout: 15_000, retry: false) do
+      {:ok, %{status: 200, body: resp}} ->
+        {:ok, resp}
+
+      {:ok, %{status: status, body: resp}} ->
+        {:error, {:exchange_failed, status, resp}}
+
+      {:error, reason} ->
+        {:error, {:exchange_request_failed, reason}}
+    end
+  end
+
+  # -- Private: Refresh --
+
+  defp do_refresh(%{refresh_token: nil}), do: {:error, :no_refresh_token}
+
+  defp do_refresh(%{refresh_token: refresh_token} = state) do
+    body = %{
+      grant_type: "refresh_token",
+      refresh_token: refresh_token,
+      client_id: @client_id
+    }
+
+    case Req.post(@token_url, json: body, receive_timeout: 15_000, retry: false) do
+      {:ok, %{status: 200, body: resp}} ->
+        new_state = persist_and_update(resp, state)
+        {:ok, new_state}
+
+      {:ok, %{status: status, body: resp}} ->
+        {:error, {:refresh_failed, status, resp}}
+
+      {:error, reason} ->
+        {:error, {:refresh_request_failed, reason}}
+    end
+  end
+
+  # -- Private: Persistence --
 
   defp load_persisted_tokens do
     base = %{
@@ -237,27 +301,7 @@ defmodule Traitee.LLM.OAuth.TokenManager do
     }
   end
 
-  defp do_refresh(%{refresh_token: nil}), do: {:error, :no_refresh_token}
-
-  defp do_refresh(%{refresh_token: refresh_token} = state) do
-    body = %{
-      grant_type: "refresh_token",
-      refresh_token: refresh_token,
-      client_id: @client_id
-    }
-
-    case Req.post(@token_url, json: body, receive_timeout: 15_000, retry: false) do
-      {:ok, %{status: 200, body: resp}} ->
-        new_state = persist_and_update(resp, state)
-        {:ok, new_state}
-
-      {:ok, %{status: status, body: resp}} ->
-        {:error, {:refresh_failed, status, resp}}
-
-      {:error, reason} ->
-        {:error, {:refresh_request_failed, reason}}
-    end
-  end
+  # -- Private: Scheduling --
 
   defp maybe_schedule_refresh(%{expires_at: nil} = state), do: state
   defp maybe_schedule_refresh(%{refresh_token: nil} = state), do: state

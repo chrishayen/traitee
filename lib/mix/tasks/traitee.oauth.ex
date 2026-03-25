@@ -51,13 +51,9 @@ defmodule Mix.Tasks.Traitee.Oauth do
     if raw == "" do
       IO.puts("#{ANSI.red()}No token provided. Aborting.#{ANSI.reset()}")
     else
-      token_map =
-        case Jason.decode(raw) do
-          {:ok, map} when is_map(map) -> map
-          _ -> %{"access_token" => raw}
-        end
+      IO.puts("  Exchanging setup-token for OAuth credentials...")
 
-      case TokenManager.store_tokens(token_map) do
+      case TokenManager.exchange_and_store(String.trim(raw)) do
         :ok ->
           IO.puts("""
 
@@ -71,8 +67,8 @@ defmodule Mix.Tasks.Traitee.Oauth do
             Available models: claude-sonnet-4, claude-opus-4, claude-opus-4.6, claude-haiku-3.5
           """)
 
-        error ->
-          IO.puts("#{ANSI.red()}Failed to store token: #{inspect(error)}#{ANSI.reset()}")
+        {:error, reason} ->
+          IO.puts("#{ANSI.red()}Token exchange failed: #{inspect(reason)}#{ANSI.reset()}")
       end
     end
   end
