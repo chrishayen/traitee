@@ -2,15 +2,9 @@ defmodule Mix.Tasks.Traitee.Oauth do
   @moduledoc """
   Manage Claude subscription authentication.
 
-      mix traitee.oauth            # Link a Claude Pro/Max subscription
+      mix traitee.oauth            # Log in via browser (OAuth PKCE)
       mix traitee.oauth --status   # Show token status and expiry
       mix traitee.oauth --logout   # Clear stored tokens
-
-  ## Setup
-
-  1. Run `claude setup-token` in another terminal to generate a token
-  2. Run `mix traitee.oauth` and paste the token when prompted
-  3. Set `model = "sub/claude-sonnet-4"` in your TOML config
   """
 
   use Mix.Task
@@ -18,7 +12,7 @@ defmodule Mix.Tasks.Traitee.Oauth do
   alias IO.ANSI
   alias Traitee.LLM.OAuth.TokenManager
 
-  @shortdoc "Link a Claude Pro/Max subscription via setup-token"
+  @shortdoc "Link a Claude Pro/Max subscription via OAuth"
 
   @impl true
   def run(args) do
@@ -27,49 +21,34 @@ defmodule Mix.Tasks.Traitee.Oauth do
     case args do
       ["--status"] -> show_status()
       ["--logout"] -> logout()
-      _ -> link_subscription()
+      _ -> login()
     end
   end
 
-  defp link_subscription do
+  defp login do
     IO.puts("""
 
-      #{ANSI.bright()}Claude Subscription Setup#{ANSI.reset()}
+      #{ANSI.bright()}Claude Subscription Login#{ANSI.reset()}
 
-      #{ANSI.faint()}Link your Claude Pro/Max subscription to use Claude
-      models at no per-token cost.#{ANSI.reset()}
-
-      #{ANSI.cyan()}Step 1:#{ANSI.reset()} Run this in another terminal:
-
-        claude setup-token
-
-      #{ANSI.cyan()}Step 2:#{ANSI.reset()} Paste the output below.
+      #{ANSI.faint()}Opening your browser to sign in with your Claude account...#{ANSI.reset()}
     """)
 
-    raw = IO.gets("Setup token: ") |> to_string() |> String.trim()
+    case TokenManager.login() do
+      :ok ->
+        IO.puts("""
 
-    if raw == "" do
-      IO.puts("#{ANSI.red()}No token provided. Aborting.#{ANSI.reset()}")
-    else
-      case TokenManager.store_setup_token(String.trim(raw)) do
-        :ok ->
-          IO.puts("""
+          #{ANSI.green()}#{ANSI.bright()}Authenticated!#{ANSI.reset()}
 
-            #{ANSI.green()}#{ANSI.bright()}Subscription linked!#{ANSI.reset()}
+          Add this to your config (#{Traitee.config_path()}):
 
-            Token will be exchanged automatically on first use.
+            #{ANSI.cyan()}[agent]
+            model = "sub/claude-sonnet-4"#{ANSI.reset()}
 
-            Add this to your config (#{Traitee.config_path()}):
+          Available models: claude-sonnet-4, claude-opus-4, claude-opus-4.6, claude-haiku-3.5
+        """)
 
-              #{ANSI.cyan()}[agent]
-              model = "sub/claude-sonnet-4"#{ANSI.reset()}
-
-            Available models: claude-sonnet-4, claude-opus-4, claude-opus-4.6, claude-haiku-3.5
-          """)
-
-        error ->
-          IO.puts("#{ANSI.red()}Failed to store token: #{inspect(error)}#{ANSI.reset()}")
-      end
+      {:error, reason} ->
+        IO.puts("#{ANSI.red()}Login failed: #{inspect(reason)}#{ANSI.reset()}")
     end
   end
 

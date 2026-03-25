@@ -10,7 +10,7 @@ defmodule Traitee.Onboard.Wizard do
     "1" => {:openai, "OpenAI", "OPENAI_API_KEY"},
     "2" => {:anthropic, "Anthropic", "ANTHROPIC_API_KEY"},
     "3" => {:ollama, "Ollama (local)", nil},
-    "4" => {:claude_subscription, "Claude Subscription (Pro/Max)", :setup_token}
+    "4" => {:claude_subscription, "Claude Subscription (Pro/Max)", :oauth_login}
   }
 
   @default_models %{
@@ -177,13 +177,16 @@ defmodule Traitee.Onboard.Wizard do
       Map.get(@providers, choice, Map.fetch!(@providers, "1"))
 
     cond do
-      env_var == :setup_token ->
-        puts(
-          "\n  Run #{ANSI.cyan()}claude setup-token#{ANSI.reset()} in another terminal to get your token."
-        )
+      env_var == :oauth_login ->
+        puts("\n  Opening browser to sign in with your Claude account...")
 
-        token = prompt_secret("Paste your setup token")
-        store_setup_token(token)
+        case Traitee.LLM.OAuth.TokenManager.login() do
+          :ok ->
+            puts("  #{ANSI.green()}Authenticated!#{ANSI.reset()}")
+
+          {:error, reason} ->
+            puts("  #{ANSI.red()}Login failed: #{inspect(reason)}#{ANSI.reset()}")
+        end
 
       env_var ->
         api_key = prompt_secret("Enter your #{provider_name} API key")
@@ -1236,10 +1239,6 @@ defmodule Traitee.Onboard.Wizard do
 
   defp prompt_secret(label) do
     IO.gets("#{label}: ") |> to_string() |> String.trim()
-  end
-
-  defp store_setup_token(raw_token) do
-    Traitee.LLM.OAuth.TokenManager.store_setup_token(String.trim(raw_token))
   end
 
   defp confirm?(question) do
