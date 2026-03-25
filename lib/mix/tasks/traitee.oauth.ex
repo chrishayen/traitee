@@ -51,13 +51,13 @@ defmodule Mix.Tasks.Traitee.Oauth do
     if raw == "" do
       IO.puts("#{ANSI.red()}No token provided. Aborting.#{ANSI.reset()}")
     else
-      IO.puts("  Exchanging setup-token for OAuth credentials...")
-
-      case TokenManager.exchange_and_store(String.trim(raw)) do
+      case TokenManager.store_setup_token(String.trim(raw)) do
         :ok ->
           IO.puts("""
 
             #{ANSI.green()}#{ANSI.bright()}Subscription linked!#{ANSI.reset()}
+
+            Token will be exchanged automatically on first use.
 
             Add this to your config (#{Traitee.config_path()}):
 
@@ -67,8 +67,8 @@ defmodule Mix.Tasks.Traitee.Oauth do
             Available models: claude-sonnet-4, claude-opus-4, claude-opus-4.6, claude-haiku-3.5
           """)
 
-        {:error, reason} ->
-          IO.puts("#{ANSI.red()}Token exchange failed: #{inspect(reason)}#{ANSI.reset()}")
+        error ->
+          IO.puts("#{ANSI.red()}Failed to store token: #{inspect(error)}#{ANSI.reset()}")
       end
     end
   end

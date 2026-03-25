@@ -1239,7 +1239,7 @@ defmodule Traitee.Onboard.Wizard do
   end
 
   defp store_setup_token(raw_token) do
-    Traitee.LLM.OAuth.TokenManager.exchange_and_store(String.trim(raw_token))
+    Traitee.LLM.OAuth.TokenManager.store_setup_token(String.trim(raw_token))
   end
 
   defp confirm?(question) do

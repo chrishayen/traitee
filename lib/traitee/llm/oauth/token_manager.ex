@@ -48,6 +48,11 @@ defmodule Traitee.LLM.OAuth.TokenManager do
     GenServer.call(__MODULE__, {:exchange, setup_token}, 30_000)
   end
 
+  @doc "Stores a raw setup-token. It will be exchanged lazily on first use."
+  def store_setup_token(token) when is_binary(token) do
+    GenServer.call(__MODULE__, {:store_setup_token, token})
+  end
+
   @doc "Stores already-exchanged tokens directly (map with access_token, refresh_token, expires_in)."
   def store_tokens(token_map) do
     GenServer.call(__MODULE__, {:store_tokens, token_map})
@@ -82,6 +87,20 @@ defmodule Traitee.LLM.OAuth.TokenManager do
   end
 
   @impl true
+  def handle_call(:get_access_token, _from, %{status: :ready, needs_exchange: true} = state) do
+    case do_exchange(state.access_token) do
+      {:ok, token_resp} ->
+        new_state = persist_and_update(token_resp, state) |> Map.put(:needs_exchange, false)
+        CredentialStore.delete(@provider, "needs_exchange")
+        Logger.info("[claude_subscription] Setup-token exchanged successfully")
+        {:reply, {:ok, new_state.access_token}, maybe_schedule_refresh(new_state)}
+
+      {:error, reason} ->
+        Logger.error("[claude_subscription] Setup-token exchange failed: #{inspect(reason)}")
+        {:reply, {:error, {:exchange_failed, reason}}, state}
+    end
+  end
+
   def handle_call(:get_access_token, _from, %{status: :ready} = state) do
     {:reply, {:ok, state.access_token}, state}
   end
@@ -107,6 +126,24 @@ defmodule Traitee.LLM.OAuth.TokenManager do
     end
   end
 
+  def handle_call({:store_setup_token, token}, _from, state) do
+    cancel_timer(state)
+    CredentialStore.store(@provider, "access_token", token)
+    CredentialStore.store(@provider, "needs_exchange", "true")
+    Logger.info("[claude_subscription] Setup-token stored, will exchange on first use")
+
+    {:reply, :ok,
+     %{
+       access_token: token,
+       refresh_token: nil,
+       expires_at: nil,
+       status: :ready,
+       needs_exchange: true,
+       refresh_timer: nil,
+       retry_count: 0
+     }}
+  end
+
   def handle_call({:store_tokens, token_map}, _from, state) do
     new_state = persist_and_update(token_map, state)
     {:reply, :ok, maybe_schedule_refresh(new_state)}
@@ -128,6 +165,7 @@ defmodule Traitee.LLM.OAuth.TokenManager do
     CredentialStore.delete(@provider, "access_token")
     CredentialStore.delete(@provider, "refresh_token")
     CredentialStore.delete(@provider, "expires_at")
+    CredentialStore.delete(@provider, "needs_exchange")
 
     {:reply, :ok,
      %{
@@ -135,6 +173,7 @@ defmodule Traitee.LLM.OAuth.TokenManager do
        refresh_token: nil,
        expires_at: nil,
        status: :unconfigured,
+       needs_exchange: false,
        refresh_timer: nil,
        retry_count: 0
      }}
@@ -231,12 +270,15 @@ defmodule Traitee.LLM.OAuth.TokenManager do
       refresh_token: nil,
       expires_at: nil,
       status: :unconfigured,
+      needs_exchange: false,
       refresh_timer: nil,
       retry_count: 0
     }
 
     case CredentialStore.load(@provider, "access_token") do
       {:ok, access_token} ->
+        needs_exchange = CredentialStore.load(@provider, "needs_exchange") == {:ok, "true"}
+
         refresh_token =
           case CredentialStore.load(@provider, "refresh_token") do
             {:ok, rt} -> rt
@@ -250,6 +292,7 @@ defmodule Traitee.LLM.OAuth.TokenManager do
           | access_token: access_token,
             refresh_token: refresh_token,
             expires_at: expires_at,
+            needs_exchange: needs_exchange,
             status: :ready
         }
 
