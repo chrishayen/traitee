@@ -104,23 +104,26 @@ defmodule Traitee.LLM.OAuth.PKCE do
   # -- Token Exchange --
 
   defp exchange_code(code, verifier, redirect_uri, state) do
-    body =
-      Jason.encode!(%{
-        code: code,
-        state: state,
-        grant_type: "authorization_code",
-        client_id: @client_id,
-        redirect_uri: redirect_uri,
-        code_verifier: verifier
-      })
+    exchange_body = %{
+      code: code,
+      state: state,
+      grant_type: "authorization_code",
+      client_id: @client_id,
+      redirect_uri: redirect_uri,
+      code_verifier: verifier
+    }
 
-    headers = [
-      {"content-type", "application/json"},
-      {"accept", "application/json"},
-      {"user-agent", "axios/1.13.6"}
-    ]
+    Logger.debug("[oauth] Exchange body: #{inspect(exchange_body)}")
 
-    case Req.post(@token_url, body: body, headers: headers, receive_timeout: 15_000, retry: false) do
+    case Req.post(@token_url,
+           json: exchange_body,
+           headers: [
+             {"accept", "application/json, text/plain, */*"},
+             {"user-agent", "axios/1.13.6"}
+           ],
+           receive_timeout: 15_000,
+           retry: false
+         ) do
       {:ok, %{status: 200, body: resp}} ->
         {:ok, resp}
 
